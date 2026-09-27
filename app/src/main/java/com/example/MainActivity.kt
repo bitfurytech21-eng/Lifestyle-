@@ -66,9 +66,8 @@ fun DailyAmericanApp(
     }
 
     Scaffold(
-        modifier = modifier
-            .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.safeDrawing),
+        modifier = modifier.fillMaxSize(),
+        contentWindowInsets = WindowInsets.safeDrawing,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = WarmPaperCream
     ) { innerPadding ->

@@ -2,15 +2,9 @@ package com.example
 
 import android.app.Application
 import android.util.Log
-import androidx.work.Configuration
 import com.example.data.sync.TimelineSyncScheduler
 
-class DailyAmericanApplication : Application(), Configuration.Provider {
-
-    override val workManagerConfiguration: Configuration
-        get() = Configuration.Builder()
-            .setMinimumLoggingLevel(Log.INFO)
-            .build()
+class DailyAmericanApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()

@@ -186,9 +186,13 @@ class DailyAmericanViewModel(application: Application) : AndroidViewModel(applic
         }
 
         viewModelScope.launch {
-            TimelineSyncScheduler.observeSyncWorkInfo(application).collect { workInfoList ->
-                val isRunning = workInfoList.any { it.state == WorkInfo.State.RUNNING }
-                _uiState.update { it.copy(isSyncingWithRemote = isRunning) }
+            try {
+                TimelineSyncScheduler.observeSyncWorkInfo(application).collect { workInfoList ->
+                    val isRunning = workInfoList.any { it.state == WorkInfo.State.RUNNING }
+                    _uiState.update { it.copy(isSyncingWithRemote = isRunning) }
+                }
+            } catch (e: Throwable) {
+                android.util.Log.w("DailyAmericanVM", "WorkInfo observation skipped: ${e.message}")
             }
         }
     }
@@ -272,7 +276,7 @@ class DailyAmericanViewModel(application: Application) : AndroidViewModel(applic
             state.copy(
                 selectedEdition = edition,
                 activeVoiceProfile = defaultVoice,
-                chatMessages = listOf(createInitialChatMessage(edition))
+                chatMessages = listOf(createInitialChatMessage(edition, state.selectedScenario))
             )
         }
         observeTimelineFromCache(edition, _uiState.value.selectedCategory)
@@ -280,7 +284,7 @@ class DailyAmericanViewModel(application: Application) : AndroidViewModel(applic
 
     private fun createInitialChatMessage(
         edition: CountryEdition,
-        scenario: PracticeScenario = _uiState.value.selectedScenario
+        scenario: PracticeScenario = PracticeScenario.CASUAL_CHAT
     ): ChatMessage {
         val tutorName = if (edition == CountryEdition.CANADIAN) "Robin" else "Sam"
         val nationName = if (edition == CountryEdition.CANADIAN) "Canadian" else "American"
