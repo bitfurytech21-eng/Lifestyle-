@@ -22,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ui.components.ConversationRefinerView
 import com.example.ui.components.EditorialHeader
 import com.example.ui.components.NavigationTabBar
 import com.example.ui.components.PhotoGalleryView
@@ -30,6 +31,7 @@ import com.example.ui.components.TimelineDetailDialog
 import com.example.ui.components.TimelineView
 import com.example.ui.components.TutorChatView
 import com.example.ui.components.VoiceCloneStudioDialog
+import com.example.ui.components.VoiceCloneStudioView
 import com.example.ui.theme.DailyAmericanTheme
 import com.example.ui.theme.WarmPaperCream
 import com.example.viewmodel.AppTab
@@ -120,6 +122,57 @@ fun DailyAmericanApp(
                             onPracticeInChat = { viewModel.practiceInChat(it) },
                             onSpeak = { viewModel.speakText(it) },
                             onToggleBookmark = { viewModel.toggleBookmark(it) }
+                        )
+                    }
+
+                    AppTab.REFINER -> {
+                        ConversationRefinerView(
+                            edition = uiState.selectedEdition,
+                            inputText = uiState.refinerInputText,
+                            refinedResult = uiState.refinerResult,
+                            isRefining = uiState.isRefiningConversation,
+                            selectedTone = uiState.selectedRefinerTone,
+                            selectedAction = uiState.selectedRefinerAction,
+                            errorMessage = uiState.refinerErrorMessage,
+                            undoStack = uiState.refinerUndoStack,
+                            onInputTextChanged = { viewModel.updateRefinerInputText(it) },
+                            onToneSelected = { viewModel.selectRefinerTone(it) },
+                            onActionSelected = { viewModel.selectRefinerAction(it) },
+                            onRefineClicked = { viewModel.refineConversation() },
+                            onUndoClicked = { viewModel.undoRefinement() },
+                            onClearClicked = { viewModel.clearRefinerSession() },
+                            onRefinedTextChanged = { viewModel.updateRefinedTextOutput(it) }
+                        )
+                    }
+
+                    AppTab.VOICE_STUDIO -> {
+                        VoiceCloneStudioView(
+                            edition = uiState.selectedEdition,
+                            cloningStep = uiState.cloningStep,
+                            availableVoices = uiState.availableVoices,
+                            activeVoiceProfile = uiState.activeVoiceProfile,
+                            currentSentenceIndex = uiState.currentSentenceIndex,
+                            isRecordingVoice = uiState.isRecordingVoice,
+                            liveAmplitude = uiState.liveAmplitude,
+                            waveformSamples = uiState.waveformSamples,
+                            analyzedPitchHz = uiState.analyzedPitchHz,
+                            draftCloneName = uiState.draftCloneName,
+                            draftPitch = uiState.draftPitch,
+                            draftSpeed = uiState.draftSpeed,
+                            draftStyle = uiState.draftStyle,
+                            onSelectVoice = { viewModel.selectVoiceProfile(it) },
+                            onStartCloning = { viewModel.startCloningFlow() },
+                            onStartRecording = { viewModel.startRecordingCurrentSentence() },
+                            onStopAndNextRecording = { viewModel.stopAndProcessSentenceRecording() },
+                            onUpdateDraftName = { viewModel.updateDraftCloneName(it) },
+                            onUpdateDraftPitch = { viewModel.updateDraftPitch(it) },
+                            onUpdateDraftSpeed = { viewModel.updateDraftSpeed(it) },
+                            onUpdateDraftStyle = { viewModel.updateDraftStyle(it) },
+                            onPreviewDraft = { viewModel.previewDraftClone(it) },
+                            onSaveCustomClone = { viewModel.saveCustomCloneProfile() },
+                            onRenameCustomVoice = { id, name -> viewModel.renameCustomVoice(id, name) },
+                            onDeleteCustomVoice = { viewModel.deleteCustomVoice(it) },
+                            onTestVoicePhrase = { profile, phrase -> viewModel.speakText(phrase, profile) }
                         )
                     }
 

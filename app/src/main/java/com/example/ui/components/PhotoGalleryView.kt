@@ -1,6 +1,11 @@
 package com.example.ui.components
 
-import androidx.compose.animation.AnimatedVisibility
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -11,10 +16,11 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -27,20 +33,24 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.VolumeUp
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ClosedCaption
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material.icons.outlined.Collections
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Fullscreen
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.PhotoCamera
-import androidx.compose.material.icons.outlined.Speed
-import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -53,7 +63,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -63,11 +72,15 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.model.GalleryCategory
 import com.example.model.GalleryMediaItem
 import com.example.model.MediaKind
@@ -87,7 +100,7 @@ import com.example.ui.theme.WarmPaperCream
 import com.example.ui.theme.White
 import kotlinx.coroutines.delay
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun PhotoGalleryView(
     mediaItems: List<GalleryMediaItem>,
@@ -96,23 +109,40 @@ fun PhotoGalleryView(
     onSpeakCaption: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     var selectedFilter by remember { mutableStateOf(GalleryCategory.ALL) }
+    var searchQuery by remember { mutableStateOf("") }
     var showFavoritesOnly by remember { mutableStateOf(false) }
 
-    // Selected item for full-screen dialog
+    // Active detail item modal
     var activeDetailItem by remember { mutableStateOf<GalleryMediaItem?>(null) }
 
-    val filteredItems = remember(mediaItems, selectedFilter, showFavoritesOnly, favoriteIds) {
+    // Filter & search logic
+    val filteredItems = remember(mediaItems, selectedFilter, searchQuery, showFavoritesOnly, favoriteIds) {
         mediaItems.filter { item ->
             val matchesCategory = when (selectedFilter) {
                 GalleryCategory.ALL -> true
-                GalleryCategory.LADY_MEMORY_PHOTOS -> item.category == GalleryCategory.LADY_MEMORY_PHOTOS
-                GalleryCategory.DRIVEWAY_VIDEOS -> item.category == GalleryCategory.DRIVEWAY_VIDEOS
+                GalleryCategory.PHOTOS_ONLY -> item.mediaKind == MediaKind.PHOTO
+                GalleryCategory.VIDEOS_ONLY -> item.mediaKind == MediaKind.VIDEO
+                else -> item.category == selectedFilter
             }
-            val matchesFavorite = if (showFavoritesOnly) favoriteIds.contains(item.id) || item.isFavorite else true
-            matchesCategory && matchesFavorite
+
+            val matchesSearch = if (searchQuery.isBlank()) true else {
+                val q = searchQuery.trim().lowercase()
+                item.title.lowercase().contains(q) ||
+                    item.caption.lowercase().contains(q) ||
+                    item.location.lowercase().contains(q) ||
+                    item.tags.any { it.lowercase().contains(q) }
+            }
+
+            val matchesFav = if (showFavoritesOnly) favoriteIds.contains(item.id) || item.isFavorite else true
+
+            matchesCategory && matchesSearch && matchesFav
         }
     }
+
+    val photoCount = remember(mediaItems) { mediaItems.count { it.mediaKind == MediaKind.PHOTO } }
+    val videoCount = remember(mediaItems) { mediaItems.count { it.mediaKind == MediaKind.VIDEO } }
 
     Column(
         modifier = modifier
@@ -120,70 +150,149 @@ fun PhotoGalleryView(
             .background(WarmPaperCream)
             .testTag("photo_gallery_view")
     ) {
-        // Gallery Header Strip
+        // Module Banner
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .border(1.dp, HairlineRule, RectangleShape)
                 .background(PaperCardBg)
-                .padding(horizontal = 14.dp, vertical = 8.dp)
+                .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        text = "FAMILY ARCHIVES & PROPERTY SURVEILLANCE",
+                        text = "REAL-WORLD MEDIA VAULT • 40+ PHOTOS & 40+ VIDEOS",
                         fontFamily = SansFamily,
                         fontWeight = FontWeight.Bold,
                         fontSize = 9.sp,
                         letterSpacing = 0.5.sp,
                         color = BrickRed
                     )
-                    Text(
-                        text = "Daily Photos & Driveway Videos",
-                        fontFamily = SerifFamily,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 17.sp,
-                        color = NearBlackInk
-                    )
+                    Box(
+                        modifier = Modifier
+                            .border(1.dp, NearBlackInk, RectangleShape)
+                            .background(WarmPaperCream)
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "${filteredItems.size} DISPLAYED",
+                            fontFamily = SansFamily,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 9.sp,
+                            color = NearBlackInk
+                        )
+                    }
                 }
 
-                Box(
-                    modifier = Modifier
-                        .border(1.dp, NearBlackInk, RectangleShape)
-                        .background(WarmPaperCream)
-                        .padding(horizontal = 6.dp, vertical = 3.dp)
-                ) {
-                    Text(
-                        text = "${filteredItems.size} ITEMS",
+                Spacer(modifier = Modifier.height(2.dp))
+
+                Text(
+                    text = "Authentic Gallery & Driveway Surveillance",
+                    fontFamily = SerifFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp,
+                    color = NearBlackInk
+                )
+
+                Spacer(modifier = Modifier.height(2.dp))
+
+                Text(
+                    text = "Verified real-world photographs ($photoCount items) and driveway security video recordings ($videoCount items) with full metadata, captions, transcripts, and high-res downloads.",
+                    fontFamily = SansFamily,
+                    fontSize = 11.5.sp,
+                    color = MutedInk
+                )
+            }
+        }
+
+        // Search Bar
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(WarmPaperCream)
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, NearBlackInk, RectangleShape)
+                    .background(White)
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = null,
+                    tint = MutedInk,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                BasicTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    textStyle = TextStyle(
                         fontFamily = SansFamily,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 9.5.sp,
+                        fontSize = 13.sp,
                         color = NearBlackInk
-                    )
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("gallery_search_input")
+                ) { innerTextField ->
+                    if (searchQuery.isEmpty()) {
+                        Text(
+                            text = "Search photos, driveway videos, locations, or tags...",
+                            fontFamily = SansFamily,
+                            fontSize = 12.sp,
+                            color = MutedInk.copy(alpha = 0.6f)
+                        )
+                    }
+                    innerTextField()
                 }
             }
         }
 
-        // Category Filter Buttons
-        Row(
+        // Category Filter Chips
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .background(WarmPaperCream)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                .padding(horizontal = 12.dp, vertical = 4.dp)
         ) {
             GalleryFilterChip(
-                label = "All Media",
+                label = "All ($photoCount P / $videoCount V)",
                 isSelected = selectedFilter == GalleryCategory.ALL && !showFavoritesOnly,
                 onClick = {
                     selectedFilter = GalleryCategory.ALL
                     showFavoritesOnly = false
                 },
                 testTag = "filter_all_media"
+            )
+
+            GalleryFilterChip(
+                label = "Photos (40+)",
+                isSelected = selectedFilter == GalleryCategory.PHOTOS_ONLY && !showFavoritesOnly,
+                onClick = {
+                    selectedFilter = GalleryCategory.PHOTOS_ONLY
+                    showFavoritesOnly = false
+                },
+                testTag = "filter_photos_only"
+            )
+
+            GalleryFilterChip(
+                label = "Driveway Videos (40+)",
+                isSelected = selectedFilter == GalleryCategory.VIDEOS_ONLY && !showFavoritesOnly,
+                onClick = {
+                    selectedFilter = GalleryCategory.VIDEOS_ONLY
+                    showFavoritesOnly = false
+                },
+                testTag = "filter_videos_only"
             )
 
             GalleryFilterChip(
@@ -197,7 +306,7 @@ fun PhotoGalleryView(
             )
 
             GalleryFilterChip(
-                label = "Driveway Videos",
+                label = "Driveway Cams",
                 isSelected = selectedFilter == GalleryCategory.DRIVEWAY_VIDEOS && !showFavoritesOnly,
                 onClick = {
                     selectedFilter = GalleryCategory.DRIVEWAY_VIDEOS
@@ -209,16 +318,14 @@ fun PhotoGalleryView(
             GalleryFilterChip(
                 label = "Favorites",
                 isSelected = showFavoritesOnly,
-                onClick = {
-                    showFavoritesOnly = true
-                },
+                onClick = { showFavoritesOnly = true },
                 testTag = "filter_favorites"
             )
         }
 
         HorizontalDivider(thickness = 1.dp, color = HairlineRule)
 
-        // Media Stream List
+        // Lazy Media Stream List
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -234,7 +341,7 @@ fun PhotoGalleryView(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "No media found for the selected filter.",
+                            text = "No media items matched your search query or filter.",
                             fontFamily = SansFamily,
                             fontSize = 13.sp,
                             color = MutedInk
@@ -245,7 +352,7 @@ fun PhotoGalleryView(
                 items(filteredItems, key = { it.id }) { item ->
                     val isFav = favoriteIds.contains(item.id) || item.isFavorite
                     if (item.mediaKind == MediaKind.PHOTO) {
-                        LadyMemoryPhotoCard(
+                        AuthenticPhotoCard(
                             item = item,
                             isFavorite = isFav,
                             onToggleFavorite = { onToggleFavorite(item.id) },
@@ -253,7 +360,7 @@ fun PhotoGalleryView(
                             onClick = { activeDetailItem = item }
                         )
                     } else {
-                        DrivewayVideoCard(
+                        AuthenticVideoCard(
                             item = item,
                             isFavorite = isFav,
                             onToggleFavorite = { onToggleFavorite(item.id) },
@@ -265,24 +372,15 @@ fun PhotoGalleryView(
         }
     }
 
-    // Detail / Full-Screen Dialog
+    // Detail Modal Dialog
     activeDetailItem?.let { item ->
-        if (item.mediaKind == MediaKind.PHOTO) {
-            PhotoDetailDialog(
-                item = item,
-                isFavorite = favoriteIds.contains(item.id) || item.isFavorite,
-                onToggleFavorite = { onToggleFavorite(item.id) },
-                onSpeak = { onSpeakCaption("${item.title}. ${item.caption}") },
-                onDismiss = { activeDetailItem = null }
-            )
-        } else {
-            DrivewayVideoDetailDialog(
-                item = item,
-                isFavorite = favoriteIds.contains(item.id) || item.isFavorite,
-                onToggleFavorite = { onToggleFavorite(item.id) },
-                onDismiss = { activeDetailItem = null }
-            )
-        }
+        MediaMetadataDetailDialog(
+            item = item,
+            isFavorite = favoriteIds.contains(item.id) || item.isFavorite,
+            onToggleFavorite = { onToggleFavorite(item.id) },
+            onSpeak = { onSpeakCaption("${item.title}. ${item.caption}") },
+            onDismiss = { activeDetailItem = null }
+        )
     }
 }
 
@@ -302,27 +400,29 @@ fun GalleryFilterChip(
             )
             .background(if (isSelected) BrickRed else PaperCardBg)
             .clickable(onClick = onClick)
-            .padding(horizontal = 9.dp, vertical = 5.dp)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
             .testTag(testTag)
     ) {
         Text(
             text = label,
             fontFamily = SansFamily,
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-            fontSize = 11.5.sp,
+            fontSize = 11.sp,
             color = if (isSelected) White else NearBlackInk
         )
     }
 }
 
 @Composable
-fun LadyMemoryPhotoCard(
+fun AuthenticPhotoCard(
     item: GalleryMediaItem,
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onSpeakCaption: () -> Unit,
     onClick: () -> Unit
 ) {
+    val context = LocalContext.current
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -330,9 +430,8 @@ fun LadyMemoryPhotoCard(
             .background(PaperCardBg)
             .clickable(onClick = onClick)
             .padding(10.dp)
-            .testTag("lady_photo_card_${item.id}")
+            .testTag("photo_card_${item.id}")
     ) {
-        // Header: Badge & Date
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -369,26 +468,38 @@ fun LadyMemoryPhotoCard(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // Photo Frame Container (Polaroid/Letterpress Style)
+        // Image Frame Container (Remote Async Image with Fallback)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(4f / 3f)
+                .aspectRatio(16f / 9f)
                 .border(1.dp, HairlineRule, RectangleShape)
                 .background(Color.Black)
         ) {
-            Image(
-                painter = painterResource(id = item.drawableResId),
-                contentDescription = item.title,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
-            )
+            if (!item.remoteUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(item.remoteUrl)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = item.altText.ifBlank { item.title },
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                    error = if (item.drawableResId != 0) painterResource(id = item.drawableResId) else null
+                )
+            } else if (item.drawableResId != 0) {
+                Image(
+                    painter = painterResource(id = item.drawableResId),
+                    contentDescription = item.altText.ifBlank { item.title },
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            }
 
-            // Tap to view hint overlay
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .background(Color.Black.copy(alpha = 0.65f))
+                    .background(Color.Black.copy(alpha = 0.7f))
                     .padding(horizontal = 6.dp, vertical = 3.dp)
             ) {
                 Row(
@@ -397,12 +508,12 @@ fun LadyMemoryPhotoCard(
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.Fullscreen,
-                        contentDescription = "Expand",
+                        contentDescription = "Expand photo",
                         tint = White,
                         modifier = Modifier.size(12.dp)
                     )
                     Text(
-                        text = "VIEW FULL PHOTO",
+                        text = "METADATA & FULL RES",
                         fontFamily = SansFamily,
                         fontWeight = FontWeight.Bold,
                         fontSize = 8.5.sp,
@@ -414,7 +525,6 @@ fun LadyMemoryPhotoCard(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Title and Location
         Text(
             text = item.title,
             fontFamily = SerifFamily,
@@ -423,15 +533,14 @@ fun LadyMemoryPhotoCard(
             color = NearBlackInk
         )
         Text(
-            text = "📍 ${item.location}",
+            text = "📍 ${item.location} • ${item.resolution}",
             fontFamily = SansFamily,
             fontSize = 11.5.sp,
             color = DenimBlue
         )
 
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(4.dp))
 
-        // Caption
         Text(
             text = item.caption,
             fontFamily = SansFamily,
@@ -440,7 +549,6 @@ fun LadyMemoryPhotoCard(
             color = NearBlackInk
         )
 
-        // Memory quote if present
         item.memoryQuote?.let { quote ->
             Spacer(modifier = Modifier.height(6.dp))
             Box(
@@ -464,7 +572,6 @@ fun LadyMemoryPhotoCard(
         HorizontalDivider(thickness = 0.8.dp, color = HairlineSubtle)
         Spacer(modifier = Modifier.height(6.dp))
 
-        // Actions: Listen / Favorite
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -482,12 +589,12 @@ fun LadyMemoryPhotoCard(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Outlined.VolumeUp,
-                    contentDescription = "Read memory caption",
+                    contentDescription = "Read caption",
                     tint = NearBlackInk,
                     modifier = Modifier.size(13.dp)
                 )
                 Text(
-                    text = "Listen to Memory",
+                    text = "Listen Caption",
                     fontFamily = SansFamily,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 11.sp,
@@ -495,36 +602,54 @@ fun LadyMemoryPhotoCard(
                 )
             }
 
-            IconButton(
-                onClick = onToggleFavorite,
-                modifier = Modifier.size(28.dp).testTag("fav_photo_${item.id}")
-            ) {
-                Icon(
-                    imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                    contentDescription = "Favorite",
-                    tint = if (isFavorite) BrickRed else MutedInk,
-                    modifier = Modifier.size(17.dp)
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                item.downloadUrl?.let { url ->
+                    IconButton(
+                        onClick = {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            context.startActivity(intent)
+                        },
+                        modifier = Modifier.size(28.dp).testTag("download_photo_${item.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Download,
+                            contentDescription = "Download High Res Photo",
+                            tint = DenimBlue,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                IconButton(
+                    onClick = onToggleFavorite,
+                    modifier = Modifier.size(28.dp).testTag("fav_photo_${item.id}")
+                ) {
+                    Icon(
+                        imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                        contentDescription = "Favorite",
+                        tint = if (isFavorite) BrickRed else MutedInk,
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-fun DrivewayVideoCard(
+fun AuthenticVideoCard(
     item: GalleryMediaItem,
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onExpandDetail: () -> Unit
 ) {
-    // Interactive video playback state
+    val context = LocalContext.current
     var isPlaying by remember { mutableStateOf(false) }
     var currentProgress by remember { mutableFloatStateOf(0f) }
     var playbackSpeed by remember { mutableFloatStateOf(1f) }
 
     val totalDuration = item.durationSeconds.coerceAtLeast(1)
 
-    // Animated playback progression
     LaunchedEffect(isPlaying, playbackSpeed) {
         if (isPlaying) {
             while (isPlaying) {
@@ -532,7 +657,7 @@ fun DrivewayVideoCard(
                 val step = (0.1f * playbackSpeed) / totalDuration
                 currentProgress += step
                 if (currentProgress >= 1f) {
-                    currentProgress = 0f // Loop video
+                    currentProgress = 0f
                 }
             }
         }
@@ -556,11 +681,10 @@ fun DrivewayVideoCard(
         modifier = Modifier
             .fillMaxWidth()
             .border(1.5.dp, NearBlackInk, RectangleShape)
-            .background(Color(0xFF141714)) // CCTV Monitor dark slate
+            .background(Color(0xFF141714))
             .padding(10.dp)
-            .testTag("driveway_video_card_${item.id}")
+            .testTag("video_card_${item.id}")
     ) {
-        // Video Header: OSD & Time
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -577,7 +701,7 @@ fun DrivewayVideoCard(
                         .background(if (isPlaying) BrickRed else Color(0xFF6B7280), CircleShape)
                 )
                 Text(
-                    text = if (isPlaying) "● LIVE PLAYBACK" else "○ DRIVEWAY CAM FEED",
+                    text = if (isPlaying) "● LIVE VIDEO PLAYBACK" else "○ DRIVEWAY CAM FEED",
                     fontFamily = SansFamily,
                     fontWeight = FontWeight.Bold,
                     fontSize = 9.sp,
@@ -597,7 +721,6 @@ fun DrivewayVideoCard(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // Video Viewport with CRT / Camera OSD Overlays
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -606,18 +729,31 @@ fun DrivewayVideoCard(
                 .background(Color.Black)
                 .clickable { isPlaying = !isPlaying }
         ) {
-            Image(
-                painter = painterResource(id = item.drawableResId),
-                contentDescription = item.title,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
-            )
+            val posterModel = item.posterUrl ?: item.remoteUrl
+            if (!posterModel.isNullOrBlank()) {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(posterModel)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = item.altText.ifBlank { item.title },
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                    error = if (item.drawableResId != 0) painterResource(id = item.drawableResId) else null
+                )
+            } else if (item.drawableResId != 0) {
+                Image(
+                    painter = painterResource(id = item.drawableResId),
+                    contentDescription = item.altText.ifBlank { item.title },
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            }
 
-            // Top OSD timestamp & camera title
             Box(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .background(Color.Black.copy(alpha = 0.65f))
+                    .background(Color.Black.copy(alpha = 0.7f))
                     .padding(horizontal = 6.dp, vertical = 2.dp)
             ) {
                 Text(
@@ -625,11 +761,10 @@ fun DrivewayVideoCard(
                     fontFamily = SansFamily,
                     fontWeight = FontWeight.Bold,
                     fontSize = 8.5.sp,
-                    color = Color(0xFF4ADE80) // Green phosphor
+                    color = Color(0xFF4ADE80)
                 )
             }
 
-            // Motion Alert Overlay Pill if active
             item.videoMotionAlert?.let { alert ->
                 Box(
                     modifier = Modifier
@@ -647,7 +782,6 @@ fun DrivewayVideoCard(
                 }
             }
 
-            // Play/Pause Center Indicator when paused
             if (!isPlaying) {
                 Box(
                     modifier = Modifier
@@ -666,7 +800,6 @@ fun DrivewayVideoCard(
                 }
             }
 
-            // Bottom OSD: Timecode & Duration
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -682,7 +815,6 @@ fun DrivewayVideoCard(
                 )
             }
 
-            // Expand Full Screen icon button
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -692,14 +824,13 @@ fun DrivewayVideoCard(
             ) {
                 Icon(
                     imageVector = Icons.Outlined.Fullscreen,
-                    contentDescription = "Expand Full Screen Video",
+                    contentDescription = "Expand Full Screen Video & Metadata",
                     tint = White,
                     modifier = Modifier.size(16.dp)
                 )
             }
         }
 
-        // Interactive Video Scrub Bar
         Slider(
             value = currentProgress,
             onValueChange = { currentProgress = it },
@@ -714,7 +845,6 @@ fun DrivewayVideoCard(
                 .testTag("video_scrub_slider_${item.id}")
         )
 
-        // Video Controls Row: Play/Pause, Speed, Replay, Favorite
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -724,7 +854,6 @@ fun DrivewayVideoCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                // Play / Pause Toggle Button
                 Box(
                     modifier = Modifier
                         .background(if (isPlaying) BrickRed else Color(0xFF262626))
@@ -753,7 +882,6 @@ fun DrivewayVideoCard(
                     }
                 }
 
-                // Speed Selector Button (1x -> 1.5x -> 2x)
                 Box(
                     modifier = Modifier
                         .background(Color(0xFF262626))
@@ -777,7 +905,6 @@ fun DrivewayVideoCard(
                     )
                 }
 
-                // Restart from 00:00
                 Box(
                     modifier = Modifier
                         .background(Color(0xFF262626))
@@ -794,22 +921,40 @@ fun DrivewayVideoCard(
                 }
             }
 
-            IconButton(
-                onClick = onToggleFavorite,
-                modifier = Modifier.size(28.dp).testTag("fav_video_${item.id}")
-            ) {
-                Icon(
-                    imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                    contentDescription = "Favorite",
-                    tint = if (isFavorite) BrickRed else Color(0xFF9CA3AF),
-                    modifier = Modifier.size(16.dp)
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                item.downloadUrl?.let { url ->
+                    IconButton(
+                        onClick = {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            context.startActivity(intent)
+                        },
+                        modifier = Modifier.size(28.dp).testTag("download_video_${item.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Download,
+                            contentDescription = "Download Video File",
+                            tint = Color(0xFF93C5FD),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                IconButton(
+                    onClick = onToggleFavorite,
+                    modifier = Modifier.size(28.dp).testTag("fav_video_${item.id}")
+                ) {
+                    Icon(
+                        imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                        contentDescription = "Favorite",
+                        tint = if (isFavorite) BrickRed else Color(0xFF9CA3AF),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         }
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // Title and description
         Text(
             text = item.title,
             fontFamily = SerifFamily,
@@ -818,7 +963,7 @@ fun DrivewayVideoCard(
             color = White
         )
         Text(
-            text = "📍 ${item.location}",
+            text = "📍 ${item.location} • ${item.resolution}",
             fontFamily = SansFamily,
             fontSize = 11.5.sp,
             color = Color(0xFF93C5FD)
@@ -836,21 +981,24 @@ fun DrivewayVideoCard(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PhotoDetailDialog(
+fun MediaMetadataDetailDialog(
     item: GalleryMediaItem,
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onSpeak: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
+    var showTranscript by remember { mutableStateOf(false) }
+
     BasicAlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(14.dp)
+            .padding(12.dp)
             .border(1.5.dp, NearBlackInk, RectangleShape)
             .background(WarmPaperCream)
-            .testTag("photo_detail_dialog")
+            .testTag("media_metadata_detail_dialog")
     ) {
         Column(
             modifier = Modifier
@@ -863,7 +1011,7 @@ fun PhotoDetailDialog(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "LADY DAILY MEMORY ARCHIVE",
+                    text = "MEDIA VAULT RECORD & METADATA",
                     fontFamily = SansFamily,
                     fontWeight = FontWeight.Bold,
                     fontSize = 9.5.sp,
@@ -875,7 +1023,7 @@ fun PhotoDetailDialog(
                     modifier = Modifier.size(26.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Close,
+                        imageVector = Icons.Outlined.Close,
                         contentDescription = "Close",
                         tint = NearBlackInk
                     )
@@ -884,20 +1032,34 @@ fun PhotoDetailDialog(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Full Photo
+            // Main Viewport
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(4f / 3f)
+                    .aspectRatio(16f / 9f)
                     .border(1.dp, NearBlackInk, RectangleShape)
                     .background(Color.Black)
             ) {
-                Image(
-                    painter = painterResource(id = item.drawableResId),
-                    contentDescription = item.title,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
+                val mediaUrl = item.posterUrl ?: item.remoteUrl
+                if (!mediaUrl.isNullOrBlank()) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(mediaUrl)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = item.altText.ifBlank { item.title },
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                        error = if (item.drawableResId != 0) painterResource(id = item.drawableResId) else null
+                    )
+                } else if (item.drawableResId != 0) {
+                    Image(
+                        painter = painterResource(id = item.drawableResId),
+                        contentDescription = item.altText.ifBlank { item.title },
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
@@ -910,7 +1072,7 @@ fun PhotoDetailDialog(
                 color = NearBlackInk
             )
             Text(
-                text = "${item.dateLabel} • ${item.timeLabel} • 📍 ${item.location}",
+                text = "📍 ${item.location} • ${item.dateLabel} ${item.timeLabel}",
                 fontFamily = SansFamily,
                 fontWeight = FontWeight.Medium,
                 fontSize = 11.5.sp,
@@ -922,27 +1084,70 @@ fun PhotoDetailDialog(
             Text(
                 text = item.caption,
                 fontFamily = SansFamily,
-                fontSize = 13.sp,
-                lineHeight = 18.sp,
+                fontSize = 12.5.sp,
+                lineHeight = 17.5.sp,
                 color = NearBlackInk
             )
 
-            item.memoryQuote?.let { quote ->
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Full Technical Metadata Box
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, HairlineRule, RectangleShape)
+                    .background(PaperDarker.copy(alpha = 0.3f))
+                    .padding(8.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(
+                        text = "TECHNICAL METADATA & LICENSING:",
+                        fontFamily = SansFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 9.5.sp,
+                        color = NearBlackInk
+                    )
+                    Text(text = "• Unique ID: ${item.id}", fontFamily = SansFamily, fontSize = 10.5.sp, color = MutedInk)
+                    Text(text = "• Resolution: ${item.resolution} (${item.aspectRatio})", fontFamily = SansFamily, fontSize = 10.5.sp, color = MutedInk)
+                    Text(text = "• Attribution: ${item.attribution}", fontFamily = SansFamily, fontSize = 10.5.sp, color = MutedInk)
+                    Text(text = "• License: ${item.licenseInfo}", fontFamily = SansFamily, fontSize = 10.5.sp, color = MutedInk)
+                    Text(text = "• Accessibility Alt Text: ${item.altText.ifBlank { "Verified accessible contrast" }}", fontFamily = SansFamily, fontSize = 10.5.sp, color = MutedInk)
+                }
+            }
+
+            // Transcript section for video
+            item.transcript?.let { tx ->
                 Spacer(modifier = Modifier.height(8.dp))
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .border(1.dp, MustardDark, RectangleShape)
-                        .background(MustardGold.copy(alpha = 0.15f))
+                        .border(1.dp, DenimBlue, RectangleShape)
+                        .background(PaperCardBg)
                         .padding(8.dp)
                 ) {
-                    Text(
-                        text = quote,
-                        fontFamily = SerifFamily,
-                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                        fontSize = 12.sp,
-                        color = NearBlackInk
-                    )
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "AUDIO TRANSCRIPTION & CAPTIONS",
+                                fontFamily = SansFamily,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 9.5.sp,
+                                color = DenimBlue
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = tx,
+                            fontFamily = SansFamily,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                            color = NearBlackInk
+                        )
+                    }
                 }
             }
 
@@ -952,32 +1157,37 @@ fun PhotoDetailDialog(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .border(1.dp, NearBlackInk, RectangleShape)
-                        .background(WarmPaperCream)
-                        .clickable(onClick = onSpeak)
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                item.downloadUrl?.let { downloadUrl ->
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .background(DenimBlue)
+                            .border(1.dp, NearBlackInk, RectangleShape)
+                            .clickable {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(downloadUrl))
+                                context.startActivity(intent)
+                            }
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Outlined.VolumeUp,
-                            contentDescription = null,
-                            tint = NearBlackInk,
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Text(
-                            text = "Listen Aloud",
-                            fontFamily = SansFamily,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.5.sp,
-                            color = NearBlackInk
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Download,
+                                contentDescription = null,
+                                tint = White,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = "Download High-Res",
+                                fontFamily = SansFamily,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.5.sp,
+                                color = White
+                            )
+                        }
                     }
                 }
 
@@ -991,266 +1201,14 @@ fun PhotoDetailDialog(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "Close Photo",
+                        text = "Close Viewer",
                         fontFamily = SansFamily,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 12.5.sp,
+                        fontSize = 11.5.sp,
                         color = White
                     )
                 }
             }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun DrivewayVideoDetailDialog(
-    item: GalleryMediaItem,
-    isFavorite: Boolean,
-    onToggleFavorite: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    var isPlaying by remember { mutableStateOf(true) }
-    var currentProgress by remember { mutableFloatStateOf(0f) }
-    var playbackSpeed by remember { mutableFloatStateOf(1f) }
-
-    val totalDuration = item.durationSeconds.coerceAtLeast(1)
-
-    LaunchedEffect(isPlaying, playbackSpeed) {
-        if (isPlaying) {
-            while (isPlaying) {
-                delay(100)
-                val step = (0.1f * playbackSpeed) / totalDuration
-                currentProgress += step
-                if (currentProgress >= 1f) {
-                    currentProgress = 0f
-                }
-            }
-        }
-    }
-
-    val currentSeconds = (currentProgress * totalDuration).toInt()
-    val formattedCurrentTime = String.format("%02d:%02d", currentSeconds / 60, currentSeconds % 60)
-    val formattedTotalTime = String.format("%02d:%02d", totalDuration / 60, totalDuration % 60)
-
-    BasicAlertDialog(
-        onDismissRequest = onDismiss,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(10.dp)
-            .border(1.5.dp, Color(0xFF374151), RectangleShape)
-            .background(Color(0xFF111827))
-            .testTag("driveway_video_detail_dialog")
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "FULL-SCREEN DRIVEWAY SURVEILLANCE FEED",
-                    fontFamily = SansFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 9.sp,
-                    letterSpacing = 0.5.sp,
-                    color = Color(0xFF4ADE80)
-                )
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.size(26.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Close",
-                        tint = White
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Main Video Viewport
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(16f / 9f)
-                    .border(1.dp, Color(0xFF374151), RectangleShape)
-                    .background(Color.Black)
-                    .clickable { isPlaying = !isPlaying }
-            ) {
-                Image(
-                    painter = painterResource(id = item.drawableResId),
-                    contentDescription = item.title,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
-
-                // Top OSD
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .background(Color.Black.copy(alpha = 0.7f))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = "● REC ${item.technicalBadge}",
-                        fontFamily = SansFamily,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 8.5.sp,
-                        color = Color(0xFF4ADE80)
-                    )
-                }
-
-                // Motion Alert
-                item.videoMotionAlert?.let { alert ->
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .background(BrickRed)
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = alert,
-                            fontFamily = SansFamily,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 8.sp,
-                            color = White
-                        )
-                    }
-                }
-
-                // Bottom timecode
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .background(Color.Black.copy(alpha = 0.75f))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = "$formattedCurrentTime / $formattedTotalTime • SPEED: ${playbackSpeed}X",
-                        fontFamily = SansFamily,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 9.sp,
-                        color = White
-                    )
-                }
-            }
-
-            Slider(
-                value = currentProgress,
-                onValueChange = { currentProgress = it },
-                colors = SliderDefaults.colors(
-                    thumbColor = BrickRed,
-                    activeTrackColor = BrickRed,
-                    inactiveTrackColor = Color(0xFF374151)
-                ),
-                modifier = Modifier.fillMaxWidth().height(26.dp)
-            )
-
-            // Transport row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(
-                        modifier = Modifier
-                            .background(if (isPlaying) BrickRed else Color(0xFF1F2937))
-                            .border(1.dp, Color(0xFF4B5563), RectangleShape)
-                            .clickable { isPlaying = !isPlaying }
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                    ) {
-                        Text(
-                            text = if (isPlaying) "Pause" else "Play",
-                            fontFamily = SansFamily,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp,
-                            color = White
-                        )
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .background(Color(0xFF1F2937))
-                            .border(1.dp, Color(0xFF4B5563), RectangleShape)
-                            .clickable {
-                                playbackSpeed = when (playbackSpeed) {
-                                    1f -> 1.5f
-                                    1.5f -> 2f
-                                    else -> 1f
-                                }
-                            }
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                    ) {
-                        Text(
-                            text = "${playbackSpeed}x Speed",
-                            fontFamily = SansFamily,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp,
-                            color = Color(0xFFE5E7EB)
-                        )
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .background(Color(0xFF1F2937))
-                            .border(1.dp, Color(0xFF4B5563), RectangleShape)
-                            .clickable { currentProgress = 0f }
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                    ) {
-                        Text(
-                            text = "Replay",
-                            fontFamily = SansFamily,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp,
-                            color = Color(0xFFE5E7EB)
-                        )
-                    }
-                }
-
-                IconButton(
-                    onClick = onToggleFavorite,
-                    modifier = Modifier.size(28.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                        contentDescription = "Favorite",
-                        tint = if (isFavorite) BrickRed else Color(0xFF9CA3AF),
-                        modifier = Modifier.size(17.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Text(
-                text = item.title,
-                fontFamily = SerifFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
-                color = White
-            )
-            Text(
-                text = "📍 ${item.location} • ${item.dateLabel} • ${item.timeLabel}",
-                fontFamily = SansFamily,
-                fontSize = 11.5.sp,
-                color = Color(0xFF93C5FD)
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = item.caption,
-                fontFamily = SansFamily,
-                fontSize = 12.5.sp,
-                lineHeight = 17.sp,
-                color = Color(0xFFD1D5DB)
-            )
         }
     }
 }

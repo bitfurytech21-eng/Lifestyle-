@@ -51,13 +51,17 @@ fun NavigationTabBar(
                 val isSelected = tab == selectedTab
                 val tabTitle = when (tab) {
                     AppTab.TIMELINE -> if (edition == CountryEdition.CANADIAN) "Day in Canada" else "Day in America"
-                    AppTab.GALLERY -> "Photos Gallery"
+                    AppTab.REFINER -> "Refiner"
+                    AppTab.VOICE_STUDIO -> "Voice Studio"
                     AppTab.TUTOR -> if (edition == CountryEdition.CANADIAN) "Canadian Tutor" else "American Tutor"
+                    AppTab.GALLERY -> "Photos Gallery"
                 }
                 val tag = when (tab) {
                     AppTab.TIMELINE -> "tab_day_in_country"
-                    AppTab.GALLERY -> "tab_photos_gallery"
+                    AppTab.REFINER -> "tab_refiner"
+                    AppTab.VOICE_STUDIO -> "tab_voice_studio"
                     AppTab.TUTOR -> "tab_ai_tutor"
+                    AppTab.GALLERY -> "tab_photos_gallery"
                 }
 
                 Box(

@@ -36,10 +36,16 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
+import com.example.data.RefinerAction
+import com.example.data.RefinerResult
+import com.example.data.RefinerTone
+
 enum class AppTab(val americanTitle: String, val canadianTitle: String) {
     TIMELINE("Daily Life", "Daily Life"),
-    GALLERY("Photos & Videos", "Photos & Videos"),
-    TUTOR("AI English Tutor", "AI English Tutor")
+    REFINER("Refiner", "Refiner"),
+    VOICE_STUDIO("Voice Studio", "Voice Studio"),
+    TUTOR("AI English Tutor", "AI English Tutor"),
+    GALLERY("Photos & Videos", "Photos & Videos")
 }
 
 enum class CloningStep {
@@ -62,6 +68,15 @@ data class DailyAmericanUiState(
     val errorMessage: String? = null,
     val selectedScenario: PracticeScenario = PracticeScenario.CASUAL_CHAT,
     val isSpeakingSlowly: Boolean = false,
+
+    // Conversation Refiner State
+    val refinerInputText: String = "",
+    val selectedRefinerTone: RefinerTone = RefinerTone.CASUAL,
+    val selectedRefinerAction: RefinerAction = RefinerAction.REFINE_ALL,
+    val refinerResult: RefinerResult? = null,
+    val isRefiningConversation: Boolean = false,
+    val refinerErrorMessage: String? = null,
+    val refinerUndoStack: List<String> = emptyList(),
 
     // Room Database Timeline Caching State (Offline Browsing)
     val isOfflineCached: Boolean = true,
@@ -713,6 +728,101 @@ class DailyAmericanViewModel(application: Application) : AndroidViewModel(applic
 
     fun clearError() {
         _uiState.update { it.copy(errorMessage = null) }
+    }
+
+    // Conversation Refiner ViewModel Methods
+    fun updateRefinerInputText(text: String) {
+        _uiState.update { it.copy(refinerInputText = text, refinerErrorMessage = null) }
+    }
+
+    fun selectRefinerTone(tone: RefinerTone) {
+        _uiState.update { it.copy(selectedRefinerTone = tone) }
+    }
+
+    fun selectRefinerAction(action: RefinerAction) {
+        _uiState.update { it.copy(selectedRefinerAction = action) }
+    }
+
+    fun refineConversation() {
+        val input = _uiState.value.refinerInputText
+        if (input.isBlank()) return
+
+        val currentTone = _uiState.value.selectedRefinerTone
+        val currentAction = _uiState.value.selectedRefinerAction
+        val edition = _uiState.value.selectedEdition
+
+        _uiState.update { it.copy(isRefiningConversation = true, refinerErrorMessage = null) }
+
+        viewModelScope.launch {
+            val result = GeminiApiClient.refineConversation(
+                rawInput = input,
+                tone = currentTone,
+                action = currentAction,
+                edition = edition
+            )
+
+            result.onSuccess { res ->
+                _uiState.update { state ->
+                    val currentResText = state.refinerResult?.refinedText
+                    val newStack = if (!currentResText.isNullOrBlank()) {
+                        state.refinerUndoStack + currentResText
+                    } else {
+                        state.refinerUndoStack
+                    }
+
+                    state.copy(
+                        refinerResult = res,
+                        isRefiningConversation = false,
+                        refinerUndoStack = newStack
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update { state ->
+                    state.copy(
+                        isRefiningConversation = false,
+                        refinerErrorMessage = "Refinement service error: ${err.message ?: "Unknown error"}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun undoRefinement() {
+        _uiState.update { state ->
+            if (state.refinerUndoStack.isNotEmpty()) {
+                val previousText = state.refinerUndoStack.last()
+                val remainingStack = state.refinerUndoStack.dropLast(1)
+                val currentResult = state.refinerResult
+                val updatedResult = currentResult?.copy(
+                    refinedText = previousText,
+                    changesMade = currentResult.changesMade + "Reverted to previous refinement step"
+                )
+                state.copy(
+                    refinerResult = updatedResult,
+                    refinerUndoStack = remainingStack
+                )
+            } else {
+                state
+            }
+        }
+    }
+
+    fun updateRefinedTextOutput(newText: String) {
+        _uiState.update { state ->
+            val updatedRes = state.refinerResult?.copy(refinedText = newText)
+            state.copy(refinerResult = updatedRes)
+        }
+    }
+
+    fun clearRefinerSession() {
+        _uiState.update { state ->
+            state.copy(
+                refinerInputText = "",
+                refinerResult = null,
+                refinerErrorMessage = null,
+                refinerUndoStack = emptyList()
+            )
+        }
     }
 
     override fun onCleared() {
