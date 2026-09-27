@@ -1,0 +1,6 @@
+{
+  "name": "Daily American",
+  "description": "Explore everyday American routines, customs, and idioms paired with a conversational AI English tutor and a free custom voice cloning studio.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
